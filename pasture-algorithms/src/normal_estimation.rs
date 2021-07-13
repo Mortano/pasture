@@ -141,7 +141,7 @@ fn is_finite(point: &Vector3<f64>) -> bool {
 
 /// computes the centroid for a given point cloud
 /// the centroid is the point that has the same distance to all other points in the point cloud
-fn compute_centroid<T: PointBuffer>(point_cloud: &T, centroid: &mut Vector4<f64>){
+fn compute_centroid<T: PointBuffer>(point_cloud: &T, centroid: &mut Vector4<f64>) {
     if point_cloud.is_empty() {
         panic!("The point cloud is empty!");
     }
@@ -162,23 +162,24 @@ fn compute_centroid<T: PointBuffer>(point_cloud: &T, centroid: &mut Vector4<f64>
         centroid[1] = temp_centroid[1] / point_cloud.len() as f64;
         centroid[2] = temp_centroid[2] / point_cloud.len() as f64;
         centroid[3] = 1.0;
-    }
-    let mut points_in_cloud = 0;
-    for point in point_cloud.iter_attribute::<Vector3<f64>>(&POSITION_3D) {
-        if is_finite(&point) {
-            // add all points up
-            temp_centroid[0] += point.x;
-            temp_centroid[1] += point.y;
-            temp_centroid[2] += point.z;
-            points_in_cloud = points_in_cloud + 1;
+    } else {
+        let mut points_in_cloud = 0;
+        for point in point_cloud.iter_attribute::<Vector3<f64>>(&POSITION_3D) {
+            if is_finite(&point) {
+                // add all points up
+                temp_centroid[0] += point.x;
+                temp_centroid[1] += point.y;
+                temp_centroid[2] += point.z;
+                points_in_cloud = points_in_cloud + 1;
+            }
         }
-    }
 
-    // normalize over all points
-    centroid[0] = temp_centroid[0] / points_in_cloud as f64;
-    centroid[1] = temp_centroid[1] / points_in_cloud as f64;
-    centroid[2] = temp_centroid[2] / points_in_cloud as f64;
-    centroid[3] = 1.0;
+        // normalize over all points
+        centroid[0] = temp_centroid[0] / points_in_cloud as f64;
+        centroid[1] = temp_centroid[1] / points_in_cloud as f64;
+        centroid[2] = temp_centroid[2] / points_in_cloud as f64;
+        centroid[3] = 1.0;
+    }
 }
 
 /// compute the covariance matrix for a given point cloud which is a measure of spread out the points are
@@ -322,7 +323,7 @@ fn solve_polynomial(covariance_matrix: &DMatrix<f64>, eigen_values: &mut Vec<f64
         // sort increasing so that eigen_values[0] is the smallest eigen value
         eigen_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        // if the smallest eigen value is zero or less the solution is a quadratic 
+        // if the smallest eigen value is zero or less the solution is a quadratic
         if eigen_values[0] <= 0.0 {
             solve_polynomial_quadratic(&coefficient_2, &coefficient_1, eigen_values);
         }
@@ -331,24 +332,29 @@ fn solve_polynomial(covariance_matrix: &DMatrix<f64>, eigen_values: &mut Vec<f64
 
 /// calculates the largest eigen vector for a given matrix
 fn get_largest_eigen_vector(scaled_matrix: &DMatrix<f64>, eigen_vector: &mut Vec<f64>) {
-    let mut rows = Vec::new();
+    let mut rows = vec![];
     rows.push(scaled_matrix.row(0).cross(&scaled_matrix.row(1)));
     rows.push(scaled_matrix.row(0).cross(&scaled_matrix.row(2)));
     rows.push(scaled_matrix.row(1).cross(&scaled_matrix.row(2)));
 
     let mut cross_product = DMatrix::<f64>::zeros(3, 3);
 
+    // write rows of cross product
     for it in cross_product.row_iter_mut().zip(rows) {
         let (mut cross_row, row) = it;
+        // row from rows vector is written to the row of the cross product
         cross_row.copy_from(&row);
     }
 
+    // find largest eigen vector
     let mut largest_eigen_vec = cross_product.row(0);
     for row in cross_product.row_iter() {
         if row.norm() > largest_eigen_vec.norm() {
             largest_eigen_vec = row;
         }
     }
+
+    // set eigen vector to largest vector
     for i in 0..eigen_vector.len() {
         eigen_vector[i] = largest_eigen_vec[i];
     }
