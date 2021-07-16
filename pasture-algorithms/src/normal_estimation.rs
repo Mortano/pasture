@@ -1,11 +1,11 @@
 use core::panic;
 
 use kd_tree::{self, KdPoint, KdTree};
-use num_traits::{self, Zero, zero};
+use num_traits::{self};
 use pasture_core::layout::{attributes::POSITION_3D, PointType};
 use pasture_core::{
     containers::{PerAttributeVecPointStorage, PointBuffer, PointBufferExt},
-    nalgebra::{DMatrix, Vector3, Vector4},
+    nalgebra::{DMatrix, Vector3},
 };
 
 /// Normal Estimation Algorithm
@@ -74,7 +74,7 @@ use pasture_core::{
 pub fn compute_normals<T: PointBuffer, P: PointType + KdPoint + Copy>(
     point_cloud: &T,
     k_nn: usize,
-) -> Vec<(P, f64, f64, f64, f64)>
+) -> Vec<(P, Vec<f64>, f64)>
 where
     P::Scalar: num_traits::Float,
 {
@@ -104,18 +104,11 @@ where
             k_nn_buffer.push_point(*point);
         }
 
-        // coordinates of the surface normal
-        let mut n_x: f64 = 0.0;
-        let mut n_y: f64 = 0.0;
-        let mut n_z: f64 = 0.0;
-
-        // curvature
-        let mut curvature: f64 = 0.0;
-
-        normal_estimation(&k_nn_buffer, &mut n_x, &mut n_y, &mut n_z, &mut curvature);
+        // coordinates of the surface normal and curvature
+        let (surface_normal, curvature) = normal_estimation(&k_nn_buffer);
 
         // solution vector
-        points_with_normals_curvature.push((point, n_x, n_y, n_z, curvature));
+        points_with_normals_curvature.push((point, surface_normal, curvature));
     }
 
     return points_with_normals_curvature;
@@ -141,13 +134,13 @@ fn is_finite(point: &Vector3<f64>) -> bool {
 
 /// computes the centroid for a given point cloud
 /// the centroid is the point that has the same distance to all other points in the point cloud
-fn compute_centroid<T: PointBuffer>(point_cloud: &T) -> Vector3<f64> {
+fn compute_centroid<T: PointBuffer>(point_cloud: &T) -> Vec<f64> {
     if point_cloud.is_empty() {
         panic!("The point cloud is empty!");
     }
 
-    let mut centroid = Vector3::<f64>::zero();
-    let mut temp_centroid = vec![0.0; 3];
+    let mut centroid= vec![0.0;3];
+    let mut temp_centroid = vec![0.0;3];
 
     if is_dense(point_cloud) {
         // add all points up
@@ -256,7 +249,7 @@ fn solve_polynomial_quadratic(
     coefficient_1: &f64
 ) -> Vec<f64>{
 
-    let mut eigen_values: Vec<f64>;    
+    let mut eigen_values = vec![0.0;3];    
     
     eigen_values[0] = 0.0;
 
@@ -292,11 +285,12 @@ fn solve_polynomial(covariance_matrix: &DMatrix<f64>) -> Vec<f64> {
     let coefficient_2 =
         covariance_matrix[(0, 0)] + covariance_matrix[(1, 1)] + covariance_matrix[(2, 2)];
 
-    let eigen_values;
     // check if one eigen value solution is zero
     if coefficient_0.abs() < std::f64::EPSILON {
-        eigen_values = solve_polynomial_quadratic(&coefficient_2, &coefficient_1);
+        return solve_polynomial_quadratic(&coefficient_2, &coefficient_1);
     } else {
+        let mut eigen_values = vec![0.0;3];
+
         let one_third = 1.0 / 3.0;
         let sqrt_3 = f64::sqrt(3.0);
 
@@ -331,14 +325,16 @@ fn solve_polynomial(covariance_matrix: &DMatrix<f64>) -> Vec<f64> {
 
         // if the smallest eigen value is zero or less the solution is a quadratic
         if eigen_values[0] <= 0.0 {
-            eigen_values = solve_polynomial_quadratic(&coefficient_2, &coefficient_1);
+            return solve_polynomial_quadratic(&coefficient_2, &coefficient_1);
+        }
+        else{
+            return  eigen_values;
         }
     }
-    return eigen_values;
 }
 
 /// calculates the largest eigen vector for a given matrix
-fn get_largest_eigen_vector(scaled_matrix: &DMatrix<f64>, eigen_vector: &mut Vec<f64>) {
+fn get_largest_eigen_vector(scaled_matrix: &DMatrix<f64>) -> Vec<f64>{
     let mut rows = vec![];
     rows.push(scaled_matrix.row(0).cross(&scaled_matrix.row(1)));
     rows.push(scaled_matrix.row(0).cross(&scaled_matrix.row(2)));
@@ -362,13 +358,16 @@ fn get_largest_eigen_vector(scaled_matrix: &DMatrix<f64>, eigen_vector: &mut Vec
     }
 
     // set eigen vector to largest vector
+    let mut eigen_vector = vec![0.0;3];
     for i in 0..eigen_vector.len() {
         eigen_vector[i] = largest_eigen_vec[i];
     }
+
+    return eigen_vector;
 }
 
 /// for a given 3x3 matrix the functions calculates the eigen vector of the smallest eigen value that can be found
-fn eigen_3x3(covariance_matrix: &DMatrix<f64>, eigen_value: &mut f64, eigen_vector: &mut Vec<f64>) {
+fn eigen_3x3(covariance_matrix: &DMatrix<f64>) -> (f64, Vec<f64>) {
     let scale = covariance_matrix.abs().max();
     let mut covariance_matrix_scaled = DMatrix::<f64>::zeros(3, 3);
     for i in 0..covariance_matrix.len() {
@@ -380,10 +379,9 @@ fn eigen_3x3(covariance_matrix: &DMatrix<f64>, eigen_value: &mut f64, eigen_vect
         covariance_matrix_scaled[index] = value / scale;
     }
 
-    let mut eigen_values = vec![0.0; 3];
-    solve_polynomial(covariance_matrix, &mut eigen_values);
+    let eigen_values = solve_polynomial(covariance_matrix);
     // undo scale for smallest eigen vector
-    *eigen_value = eigen_values[0] * scale;
+     let eigen_value = eigen_values[0] * scale;
 
     // subtract the smallest eigen value from the diagonal of the matrix
     covariance_matrix_scaled
@@ -391,51 +389,40 @@ fn eigen_3x3(covariance_matrix: &DMatrix<f64>, eigen_value: &mut f64, eigen_vect
         .iter_mut()
         .for_each(|x| *x = *x - eigen_values[0]);
 
-    get_largest_eigen_vector(&mut covariance_matrix_scaled, eigen_vector);
+    let eigen_vector = get_largest_eigen_vector(&mut covariance_matrix_scaled);
+    return (eigen_value, eigen_vector);
 }
 
 /// calculates the orientation of the surface as a normal vector with components n_x, n_y and n_z as well as the curvature of the surface for a given covariance matrix
 fn solve_plane_parameter(
-    covariance_matrix: &DMatrix<f64>,
-    eigen_vector: &mut Vec<f64>,
-    curvature: &mut f64,
-) {
-    let mut eigen_value: f64 = 0.0;
-    eigen_3x3(covariance_matrix, &mut eigen_value, eigen_vector);
+    covariance_matrix: &DMatrix<f64>) -> (Vec<f64>,f64) 
+ {
+    let (eigen_value, eigen_vector) = eigen_3x3(covariance_matrix);
 
     let eigen_sum = covariance_matrix[0] + covariance_matrix[4] + covariance_matrix[8];
+    let curvature;
     if eigen_sum != 0.0 {
-        *curvature = (eigen_value / eigen_sum).abs();
+        curvature = (eigen_value / eigen_sum).abs();
     } else {
-        *curvature = 0.0;
+        curvature = 0.0;
     }
+
+    return (eigen_vector, curvature);
 }
 
 /// calculates the normal vectors and the curvature of the surface for the given point cloud
 fn normal_estimation<T: PointBuffer>(
-    //this needs to be k nearest neighbors
-    point_cloud: &T,
-    n_x: &mut f64,
-    n_y: &mut f64,
-    n_z: &mut f64,
-    curvature: &mut f64,
-) {
-    let mut covariance_matrix = DMatrix::<f64>::zeros(3, 3);
+    point_cloud: &T) -> (Vec<f64>,f64)
+{
+    let (covariance_matrix, size) = compute_covarianz_matrix(point_cloud);
 
-    if point_cloud.len() < 3 || compute_covarianz_matrix(point_cloud).1 == 0 {
-        *n_x = f64::NAN;
-        *n_y = f64::NAN;
-        *n_z = f64::NAN;
-        *curvature = f64::NAN;
-        return;
+    if point_cloud.len() < 3 || size == 0 {
+        panic!("The point cloud has less than 3 points!");
     }
 
-    let mut eigen_vector = vec![0.0; 3];
-    solve_plane_parameter(&covariance_matrix, &mut eigen_vector, curvature);
+    let (eigen_vector, curvature) = solve_plane_parameter(&covariance_matrix);
 
-    *n_x = eigen_vector[0];
-    *n_y = eigen_vector[1];
-    *n_z = eigen_vector[2];
+    return (eigen_vector, curvature);
 }
 
 #[cfg(test)]
@@ -491,12 +478,12 @@ mod tests {
         interleaved.push_points(points.as_slice());
 
         let mut centroid = Vector4::<f64>::new_random();
-        compute_centroid(&interleaved, &mut centroid);
-        let result_centroid = Vector4::new(0.25, 0.5, 0.0, 1.0);
+        let centroid = compute_centroid(&interleaved);
+        let result_centroid = vec!(0.25, 0.5, 0.0, 1.0);
         assert_eq!(centroid, result_centroid);
 
         let mut covariance_matrix = DMatrix::<f64>::zeros(3, 3);
-        compute_covarianz_matrix(&interleaved, &mut covariance_matrix);
+        let (covariance_matrix, size) = compute_covarianz_matrix(&interleaved);
         let result = Matrix3::new(
             0.6875 * 4.0,
             0.125 * 4.0,
@@ -510,14 +497,11 @@ mod tests {
         );
         assert_eq!(covariance_matrix, result);
 
-        let mut normal_vec = vec![0.0; 3];
-        let mut curvature: f64 = 0.0;
+        let (normal_vector, curvature) = solve_plane_parameter(&covariance_matrix);
 
-        solve_plane_parameter(&covariance_matrix, &mut normal_vec, &mut curvature);
-
-        assert_eq!(normal_vec[0], 0.0);
-        assert_eq!(normal_vec[1], 0.0);
-        assert_ne!(normal_vec[2], 0.0);
+        assert_eq!(normal_vector[0], 0.0);
+        assert_eq!(normal_vector[1], 0.0);
+        assert_ne!(normal_vector[2], 0.0);
         assert_eq!(curvature, 0.0);
     }
 
