@@ -1,7 +1,7 @@
 use core::panic;
 
 use kd_tree::{self, KdPoint, KdTree};
-use num_traits::{self, Zero};
+use num_traits::{self, Zero, zero};
 use pasture_core::layout::{attributes::POSITION_3D, PointType};
 use pasture_core::{
     containers::{PerAttributeVecPointStorage, PointBuffer, PointBufferExt},
@@ -141,12 +141,12 @@ fn is_finite(point: &Vector3<f64>) -> bool {
 
 /// computes the centroid for a given point cloud
 /// the centroid is the point that has the same distance to all other points in the point cloud
-fn compute_centroid<T: PointBuffer>(point_cloud: &T, centroid: &mut Vector4<f64>) {
+fn compute_centroid<T: PointBuffer>(point_cloud: &T) -> Vector3<f64> {
     if point_cloud.is_empty() {
         panic!("The point cloud is empty!");
     }
 
-    centroid.set_zero();
+    let mut centroid = Vector3::<f64>::zero();
     let mut temp_centroid = vec![0.0; 3];
 
     if is_dense(point_cloud) {
@@ -161,7 +161,7 @@ fn compute_centroid<T: PointBuffer>(point_cloud: &T, centroid: &mut Vector4<f64>
         centroid[0] = temp_centroid[0] / point_cloud.len() as f64;
         centroid[1] = temp_centroid[1] / point_cloud.len() as f64;
         centroid[2] = temp_centroid[2] / point_cloud.len() as f64;
-        centroid[3] = 1.0;
+
     } else {
         let mut points_in_cloud = 0;
         for point in point_cloud.iter_attribute::<Vector3<f64>>(&POSITION_3D) {
@@ -178,22 +178,23 @@ fn compute_centroid<T: PointBuffer>(point_cloud: &T, centroid: &mut Vector4<f64>
         centroid[0] = temp_centroid[0] / points_in_cloud as f64;
         centroid[1] = temp_centroid[1] / points_in_cloud as f64;
         centroid[2] = temp_centroid[2] / points_in_cloud as f64;
-        centroid[3] = 1.0;
     }
+
+    return centroid;
 }
 
 /// compute the covariance matrix for a given point cloud which is a measure of spread out the points are
 fn compute_covarianz_matrix<T: PointBuffer>(
-    point_cloud: &T,
-    covariance_matrix: &mut DMatrix<f64>,
-) -> usize {
+    point_cloud: &T
+) -> (DMatrix<f64>, usize) {
+
+    let mut covariance_matrix = DMatrix::<f64>::zeros(3, 3);
     let mut point_count = 0;
     if point_cloud.is_empty() {
-        return 0;
+        return (covariance_matrix, point_count);
     }
     // compute the centroid of the point cloud
-    let mut centroid = Vector4::<f64>::zeros();
-    compute_centroid(point_cloud, &mut centroid);
+    let centroid = compute_centroid(point_cloud);
 
     if is_dense(point_cloud) {
         point_count = point_cloud.len();
@@ -246,15 +247,17 @@ fn compute_covarianz_matrix<T: PointBuffer>(
     covariance_matrix[(2, 0)] = covariance_matrix[(0, 2)];
     covariance_matrix[(2, 1)] = covariance_matrix[(1, 2)];
 
-    return point_count;
+    return (covariance_matrix, point_count);
 }
 
 /// find the eigen value solution if the highest degree of the polynomial is 2
 fn solve_polynomial_quadratic(
     coefficient_2: &f64,
-    coefficient_1: &f64,
-    eigen_values: &mut Vec<f64>,
-) {
+    coefficient_1: &f64
+) -> Vec<f64>{
+
+    let mut eigen_values: Vec<f64>;    
+    
     eigen_values[0] = 0.0;
 
     let mut delta = coefficient_2 * coefficient_2 - 4.0 * coefficient_1;
@@ -267,10 +270,12 @@ fn solve_polynomial_quadratic(
 
     eigen_values[2] = 0.5 * (coefficient_2 + sqrt_delta);
     eigen_values[1] = 0.5 * (coefficient_2 - sqrt_delta);
+
+    return eigen_values;
 }
 
 /// solve the polynomial to find the eigen values for a given covariance matrix
-fn solve_polynomial(covariance_matrix: &DMatrix<f64>, eigen_values: &mut Vec<f64>) {
+fn solve_polynomial(covariance_matrix: &DMatrix<f64>) -> Vec<f64> {
     let coefficient_0 = covariance_matrix[(0, 0)]
         * covariance_matrix[(1, 1)]
         * covariance_matrix[(2, 2)]
@@ -287,9 +292,10 @@ fn solve_polynomial(covariance_matrix: &DMatrix<f64>, eigen_values: &mut Vec<f64
     let coefficient_2 =
         covariance_matrix[(0, 0)] + covariance_matrix[(1, 1)] + covariance_matrix[(2, 2)];
 
+    let eigen_values;
     // check if one eigen value solution is zero
     if coefficient_0.abs() < std::f64::EPSILON {
-        solve_polynomial_quadratic(&coefficient_2, &coefficient_1, eigen_values);
+        eigen_values = solve_polynomial_quadratic(&coefficient_2, &coefficient_1);
     } else {
         let one_third = 1.0 / 3.0;
         let sqrt_3 = f64::sqrt(3.0);
@@ -325,9 +331,10 @@ fn solve_polynomial(covariance_matrix: &DMatrix<f64>, eigen_values: &mut Vec<f64
 
         // if the smallest eigen value is zero or less the solution is a quadratic
         if eigen_values[0] <= 0.0 {
-            solve_polynomial_quadratic(&coefficient_2, &coefficient_1, eigen_values);
+            eigen_values = solve_polynomial_quadratic(&coefficient_2, &coefficient_1);
         }
     }
+    return eigen_values;
 }
 
 /// calculates the largest eigen vector for a given matrix
@@ -415,7 +422,7 @@ fn normal_estimation<T: PointBuffer>(
 ) {
     let mut covariance_matrix = DMatrix::<f64>::zeros(3, 3);
 
-    if point_cloud.len() < 3 || compute_covarianz_matrix(point_cloud, &mut covariance_matrix) == 0 {
+    if point_cloud.len() < 3 || compute_covarianz_matrix(point_cloud).1 == 0 {
         *n_x = f64::NAN;
         *n_y = f64::NAN;
         *n_z = f64::NAN;
