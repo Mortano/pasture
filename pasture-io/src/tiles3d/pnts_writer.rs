@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use pasture_core::{
     containers::{
         BorrowedBuffer, BorrowedMutBuffer, ColumnarBuffer, HashMapBuffer, MakeBufferFromLayout,
-        OwningBuffer,
+        OwningBuffer, OwningBufferExt,
     },
     layout::{
         attributes::{COLOR_RGB, NORMAL, POSITION_3D},
@@ -414,7 +414,7 @@ mod tests {
 
     use super::*;
     use pasture_core::{
-        containers::VectorBuffer,
+        containers::{BorrowedBufferExt, VectorBuffer},
         layout::PointType,
         nalgebra::{Vector3, Vector4},
     };
